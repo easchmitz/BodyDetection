@@ -10,6 +10,61 @@ import RealityKit
 import ARKit
 import Combine
 
+class BodySkeleton: Entity {
+    var joints: [String: Entity] = [:] // Joint names mapped to joint entities
+    
+    required init() {
+        super.init()
+        
+    }
+    
+    required init(for bodyAnchor: ARBodyAnchor) {
+        super.init()
+        
+        for jointName in ARSkeletonDefinition.defaultBody3D.jointNames {
+            var jointRadius: Float = 0.02
+            var jointColor: UIColor = .green
+            
+            switch jointName {
+            case _ where jointName.contains("hand"):
+                jointRadius = 0.01
+                jointColor = .yellow
+            default:
+                jointRadius = 0.02
+                jointColor = .green
+            }
+            
+            let jointEntity = makeJoint(radius: jointRadius, color: jointColor)
+            joints[jointName] = jointEntity
+            self.addChild(jointEntity)
+        }
+        
+        self.update(with: bodyAnchor)
+    }
+    
+    func makeJoint(radius: Float, color: UIColor) -> Entity {
+        let mesh = MeshResource.generateSphere(radius: radius)
+        let material = SimpleMaterial(color: color, roughness: 0.8, isMetallic: false)
+        let modelEntity = ModelEntity(mesh: mesh, materials: [material])
+        
+        return modelEntity
+    }
+    
+    func update(with bodyAnchor: ARBodyAnchor){
+        let rootPosition = simd_make_float3(bodyAnchor.transform.columns.3)
+        
+        for jointName in ARSkeletonDefinition.defaultBody3D.jointNames {
+            if let jointEntity = joints[jointName], let jointTransform = bodyAnchor.skeleton.modelTransform(for: ARSkeleton.JointName(rawValue: jointName)) {
+                let jointOffset = simd_make_float3(jointTransform.columns.3)
+                jointEntity.position = rootPosition + jointOffset
+                jointEntity.orientation = Transform(matrix: jointTransform).rotation
+            }
+                
+            
+        }
+    }
+}
+
 class ViewController: UIViewController, ARSessionDelegate {
 
     @IBOutlet var arView: ARView!
@@ -19,7 +74,17 @@ class ViewController: UIViewController, ARSessionDelegate {
     let characterOffset: SIMD3<Float> = [-1.0, 0, 0] // Offset the character by one meter to the left
     let characterAnchor = AnchorEntity()
     
+    var bodySkeleton: BodySkeleton?
+    var skeletonAnchor = AnchorEntity()
+    
+    override func viewDidDisappear(_ animated: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+    
     override func viewDidAppear(_ animated: Bool) {
+        // disable sleep
+        UIApplication.shared.isIdleTimerDisabled = true
+        
         super.viewDidAppear(animated)
         arView.session.delegate = self
         
@@ -31,8 +96,10 @@ class ViewController: UIViewController, ARSessionDelegate {
 
         // Run a body tracking configration.
         let configuration = ARBodyTrackingConfiguration()
+        
         arView.session.run(configuration)
         
+        arView.scene.addAnchor(skeletonAnchor)
         arView.scene.addAnchor(characterAnchor)
         
         // Asynchronously load the 3D character.
@@ -57,7 +124,18 @@ class ViewController: UIViewController, ARSessionDelegate {
     
     func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
         for anchor in anchors {
+            
             guard let bodyAnchor = anchor as? ARBodyAnchor else { continue }
+            
+            if let skeleton = bodySkeleton {
+                    // already exists, update
+                    skeleton.update(with: bodyAnchor)
+                } else {
+                    // Initialize first time
+                    let skeleton = BodySkeleton(for: bodyAnchor)
+                    bodySkeleton = skeleton
+                    skeletonAnchor.addChild(skeleton)
+                }
             
             // Update the position of the character anchor's position.
             let bodyPosition = simd_make_float3(bodyAnchor.transform.columns.3)
@@ -72,6 +150,7 @@ class ViewController: UIViewController, ARSessionDelegate {
                 // 2. the character was loaded.
                 characterAnchor.addChild(character)
             }
+
         }
     }
 }
